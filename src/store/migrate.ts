@@ -38,7 +38,7 @@ import { getDefaultWeekdays } from '../utils/schedule';
 import { roundTo } from '../utils/units';
 import type { PersistedState } from './types';
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /** Ids of the schema version 1 seed foods. They are replaced by the current seed list. */
 export const V1_SEED_FOOD_IDS = new Set([
@@ -468,6 +468,22 @@ export function migrateV7ToV8(state: Record<string, unknown>): Record<string, un
 }
 
 /**
+ * Version 8 to 9: adds the exercises that joined the library. An exercise is skipped
+ * when its id is already present or an exercise with the same name exists.
+ */
+export function addMissingSeedExercises(state: Record<string, unknown>): Record<string, unknown> {
+  const exercises = (Array.isArray(state.exercises) ? state.exercises : []) as Exercise[];
+  const ids = new Set(exercises.map((exercise) => exercise?.id));
+  const names = new Set(
+    exercises.map((exercise) => (typeof exercise?.name === 'string' ? exercise.name.trim().toLowerCase() : '')),
+  );
+  const missing = SEED_EXERCISES.filter(
+    (exercise) => !ids.has(exercise.id) && !names.has(exercise.name.toLowerCase()),
+  );
+  return { ...state, schemaVersion: 9, exercises: [...exercises, ...missing] };
+}
+
+/**
  * Upgrades persisted state from `version` to SCHEMA_VERSION.
  * Each step handles one version bump; the current version is returned unchanged.
  */
@@ -507,6 +523,10 @@ export function migrateState(persistedState: unknown, version: number): Persiste
 
   if (version < 8) {
     state = migrateV7ToV8(state);
+  }
+
+  if (version < 9) {
+    state = addMissingSeedExercises(state);
   }
 
   return state as unknown as PersistedState;
