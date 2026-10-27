@@ -31,3 +31,16 @@
     display: none;
   }
 }
+
+/*
+ * iOS Safari zooms into a focused field whose text is smaller than 16px and stays
+ * zoomed after typing. Touch screens get 16px fields so typing never zooms the page.
+ * Pinch-to-zoom still works.
+ */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
