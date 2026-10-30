@@ -8,7 +8,7 @@ import {
   type FoodDraft,
   type FoodDraftErrors,
 } from './foodDraft';
-import { findFoodByDisplayName, formatFoodName } from './foodNames';
+import { findDuplicateFood, findFoodByDisplayName, formatFoodName } from './foodNames';
 import { createId } from './id';
 import { basisOf, detectMeasure, measureOf } from './measure';
 import { computePortion, type Portion } from './nutrition';
@@ -98,9 +98,12 @@ export function selectIngredientFood(row: IngredientDraft, food: FoodItem): Ingr
   return { ...row, text: formatFoodName(food), foodId: food.id, quantity: defaultQuantityDraft(measureOf(food)) };
 }
 
-/** Typing a name: an exact library match selects it; otherwise the measurement is auto-detected. */
+/**
+ * Typing a name: an exact library match (same name and state) selects it, so a new food
+ * never silently duplicates one. Otherwise the measurement is auto-detected.
+ */
 export function changeIngredientText(row: IngredientDraft, text: string, foods: FoodItem[]): IngredientDraft {
-  const match = findFoodByDisplayName(foods, text);
+  const match = findFoodByDisplayName(foods, text) ?? findDuplicateFood(foods, text, row.state);
   if (match) return selectIngredientFood(row, match);
   const wasLinked = row.foodId !== null && foods.some((food) => food.id === row.foodId);
   const draft = row.measureEdited ? row.draft : applyMeasureToDraft(row.draft, detectMeasure(text));
@@ -110,8 +113,19 @@ export function changeIngredientText(row: IngredientDraft, text: string, foods: 
     text,
     foodId: null,
     draft,
+    state: wasLinked ? 'n/a' : row.state,
     // Leaving a library food starts a fresh amount; otherwise keep what was typed when it still fits.
     quantity: wasLinked ? defaultQuantityDraft(nextMeasure) : reconcileQuantity(draftMeasure(row.draft), nextMeasure, row.quantity),
+  };
+}
+
+/** Choosing raw/cooked: the same name and state in the library is that food, not a new one. */
+export function changeIngredientState(row: IngredientDraft, state: FoodState, foods: FoodItem[]): IngredientDraft {
+  const match = findDuplicateFood(foods, row.text, state);
+  if (!match) return { ...row, state };
+  return {
+    ...selectIngredientFood(row, match),
+    quantity: reconcileQuantity(draftMeasure(row.draft), measureOf(match), row.quantity),
   };
 }
 
@@ -124,7 +138,7 @@ export function changeIngredientFoodDraft(row: IngredientDraft, draft: FoodDraft
   };
 }
 
-export function portionToIngredient(portion: Portion, name: string, foodId: string | undefined): MealIngredient {
+export function portionToIngredient(portion: Portion, name: string, foodId: string | null | undefined): MealIngredient {
   return {
     foodId,
     name,

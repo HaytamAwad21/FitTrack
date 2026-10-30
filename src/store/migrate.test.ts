@@ -66,7 +66,7 @@ describe('migrateState v1 to v2', () => {
   const foods = migrated.foods as FoodItem[];
 
   it('replaces seed foods with the current seed list and keeps user foods', () => {
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(10);
     expect(foods).toHaveLength(SEED_FOODS.length + 2);
     expect(foods.find((f) => f.id === 'food-rolled-oats')?.caloriesPer100g).toBe(367);
   });
@@ -98,8 +98,8 @@ describe('migrateState v1 to v2', () => {
   });
 
   it('returns current-version state unchanged', () => {
-    const current = { schemaVersion: 9, foods: SEED_FOODS };
-    expect(migrateState(current, 9)).toBe(current);
+    const current = { schemaVersion: 10, foods: SEED_FOODS };
+    expect(migrateState(current, 10)).toBe(current);
   });
 });
 
@@ -115,7 +115,7 @@ describe('migrateState v2 and v3 to v4', () => {
     const v2Foods = SEED_FOODS.filter((food) => !food.id.startsWith('food-grapes') && food.id !== 'food-kiwi');
     const migrated = migrateState({ schemaVersion: 2, foods: [...v2Foods, userGrapes], logs: {} }, 2);
     const foods = migrated.foods as FoodItem[];
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(10);
     expect(foods.some((food) => food.id === 'food-kiwi')).toBe(true);
     expect(foods.some((food) => food.id === 'food-grapes')).toBe(false);
     expect(foods.filter((food) => food.name.trim().toLowerCase() === 'grapes')).toHaveLength(1);
@@ -162,7 +162,7 @@ describe('migrateState v4 to v5', () => {
   const find = (id: string) => foods.find((food) => food.id === id);
 
   it('turns seed whey and fruit into serving foods, keeping their per-100 g values', () => {
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(10);
     expect(find('food-whey-protein')).toMatchObject({
       measure: { kind: 'serving', unitName: 'scoop', unitNamePlural: 'scoops', servingWeightG: 30 },
       caloriesPerServing: 120,
@@ -191,9 +191,9 @@ describe('migrateState v4 to v5', () => {
     );
   });
 
-  it('adds the new protein yogurt seed and leaves log entries unchanged', () => {
+  it('adds the new protein yogurt seed and keeps logged totals', () => {
     expect(find('food-protein-yogurt')).toMatchObject({ measure: { unitName: 'tub' }, caloriesPerServing: 120 });
-    expect(migrated.logs['2026-10-26'].entries).toEqual([entry]);
+    expect(migrated.logs['2026-10-26'].entries[0]).toMatchObject(entry);
   });
 });
 
@@ -250,7 +250,7 @@ describe('migrateState v5 to v6', () => {
   const byName = (name: string) => workouts.find((workout) => workout.name === name);
 
   it('moves stats into nutrition settings and drops the old keys', () => {
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(10);
     expect(migrated).not.toHaveProperty('user');
     expect(migrated).not.toHaveProperty('routine');
     expect(migrated.nutritionSettings).toMatchObject({ weightKg: 81.6, goal: 'cutting', customTargets: { calories: 2200 } });
@@ -330,7 +330,7 @@ describe('migrateState v6 to v7', () => {
     const v6Foods = SEED_FOODS.filter((food) => food.id !== 'food-cheese-9' && food.id !== 'food-cheese-15');
     const migrated = migrateState({ schemaVersion: 6, foods: [...v6Foods, userCopy], logs: {} }, 6);
     const foods = migrated.foods as FoodItem[];
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(10);
     expect(foods.filter((food) => food.name.toLowerCase() === 'cheese 9%')).toHaveLength(1);
     expect(foods.some((food) => food.id === 'food-cheese-15')).toBe(true);
   });
@@ -354,7 +354,7 @@ describe('migrateState v7 to v8', () => {
       userFood('c', 'Grapes'),
     ];
     const migrated = migrateState({ schemaVersion: 7, foods, logs: {} }, 7);
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(10);
     expect(migrated.foods.map((food) => food.name)).toEqual([
       'Mozzarella sticks',
       'Myprotein chocolate smooth powder',
@@ -375,11 +375,55 @@ describe('migrateState v8 to v9', () => {
     const original = SEED_EXERCISES.filter((exercise) => exercise.id !== 'ex-dumbbell-bench-press').slice(0, 54);
     const userCopy = { id: 'user-1', name: 'flat dumbbell bench press', muscleGroup: 'Chest', type: 'compound' };
     const migrated = migrateState({ schemaVersion: 8, foods: [], logs: {}, exercises: [...original, userCopy] }, 8);
-    expect(migrated.schemaVersion).toBe(9);
+    expect(migrated.schemaVersion).toBe(10);
     const names = migrated.exercises.map((exercise) => exercise.name.toLowerCase());
     expect(names.filter((name) => name === 'flat dumbbell bench press')).toHaveLength(1);
     expect(migrated.exercises.some((exercise) => exercise.id === 'ex-single-arm-cable-pushdown')).toBe(true);
     expect(migrated.exercises.slice(0, 55)).toEqual([...original, userCopy]);
     expect(migrated.exercises).toHaveLength(SEED_EXERCISES.length);
+  });
+});
+
+describe('migrateState v9 to v10', () => {
+  const entry = (patch: Partial<MealEntry>): MealEntry => ({
+    id: 'e',
+    name: 'Almonds',
+    grams: 123,
+    calories: 712,
+    proteinG: 26,
+    timestamp: '2026-10-01T08:00:00.000Z',
+    ...patch,
+  });
+  const migrateLog = (entries: MealEntry[]) =>
+    migrateState({ schemaVersion: 9, foods: SEED_FOODS, logs: { d: { id: 'd', date: 'd', entries } } }, 9).logs.d.entries;
+
+  it('links entries by exact name and infers grams, keeping the stored totals', () => {
+    const [linked] = migrateLog([entry({ name: ' almonds ' })]);
+    expect(linked).toMatchObject({ foodId: 'food-almonds', quantity: 123, unit: 'g', calories: 712, proteinG: 26 });
+  });
+
+  it('infers servings from grams for a serving food', () => {
+    const [linked] = migrateLog([entry({ name: 'Whey protein powder', grams: 45, calories: 180, proteinG: 36 })]);
+    expect(linked).toMatchObject({ foodId: 'food-whey-protein', quantity: 1.5, unit: 'scoop', unitPlural: 'scoops' });
+    expect(linked.calories).toBe(180);
+  });
+
+  it('leaves foodId null without an exact match, and for an ambiguous name', () => {
+    const [unknown, ambiguous] = migrateLog([entry({ name: 'Almond cake' }), entry({ id: 'f', name: 'Chicken breast' })]);
+    expect(unknown.foodId).toBeNull();
+    expect(unknown.calories).toBe(712);
+    expect(ambiguous.foodId).toBeNull();
+  });
+
+  it('clears a link to a deleted food and links meal ingredients', () => {
+    const ingredient = { name: 'Blueberries', grams: 100, calories: 57, proteinG: 0.7 };
+    const [meal] = migrateLog([entry({ name: 'Bowl', foodId: 'gone', ingredients: [ingredient] })]);
+    expect(meal.foodId).toBeNull();
+    expect(meal.ingredients?.[0]).toMatchObject({ foodId: 'food-blueberries', quantity: 100, unit: 'g', calories: 57 });
+  });
+
+  it('survives malformed logs', () => {
+    const migrated = migrateState({ schemaVersion: 9, foods: 'bad', logs: { x: null, y: { id: 'y', date: 'y' } } }, 9);
+    expect(migrated.logs.y.entries).toEqual([]);
   });
 });

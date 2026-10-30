@@ -103,7 +103,8 @@ export interface LoggedAmount {
 
 /** Ingredient breakdown stored on a logged multi-ingredient meal. Values are frozen at log time. */
 export interface MealIngredient extends LoggedAmount {
-  foodId?: string;
+  /** Library food this came from. Null once that food is deleted or when it never had one. */
+  foodId?: string | null;
   name: string;
   calories: number;
   proteinG: number;
@@ -112,8 +113,8 @@ export interface MealIngredient extends LoggedAmount {
 /** Logged food or meal. Totals are frozen at log time, so editing a library food never rewrites history. */
 export interface MealEntry extends LoggedAmount {
   id: string;
-  /** Library food this entry was logged from, if any. */
-  foodId?: string;
+  /** Library food this entry was logged from. Null once that food is deleted or when it never had one. */
+  foodId?: string | null;
   name: string;
   calories: number;
   proteinG: number;

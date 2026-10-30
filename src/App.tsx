@@ -7,6 +7,7 @@ import { Onboarding } from './components/settings/Onboarding';
 import { TrainingSettingsScreen } from './components/settings/TrainingSettingsScreen';
 import { TrainingTab } from './components/training/TrainingTab';
 import { Modal } from './components/ui/Modal';
+import { ToastHost } from './components/ui/ToastHost';
 import { useAppStore } from './store';
 
 function AppShell({ children }: { children: ReactNode }) {
@@ -58,6 +59,7 @@ export default function App() {
         </Modal>
       )}
       {settingsOpen === 'training' && <TrainingSettingsScreen onClose={() => setSettingsOpen(null)} />}
+      <ToastHost />
     </AppShell>
   );
 }

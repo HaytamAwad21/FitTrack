@@ -67,7 +67,10 @@ export interface NutritionSlice {
   updateFood: (id: string, patch: Partial<NewFoodItem>) => void;
   /** Replaces a food's data while keeping its id; use this when the measurement may change. */
   replaceFood: (id: string, food: NewFoodItem) => void;
+  /** Removes a food from the library. Logged entries keep their values and lose the link. */
   deleteFood: (id: string) => void;
+  /** Recalculates logged entries from a food's current values, on one date or (no date) on every date. */
+  refreshFoodEntries: (id: string, date?: string) => void;
   addEntries: (date: string, entries: NewMealEntry[]) => void;
   updateEntry: (date: string, entryId: string, patch: Partial<Omit<MealEntry, 'id'>>) => void;
   deleteEntry: (date: string, entryId: string) => void;

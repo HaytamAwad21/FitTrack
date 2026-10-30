@@ -1,13 +1,17 @@
-import type { ReactNode } from 'react';
+import { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import type { FoodItem } from '../../types';
+import { FOOD_STATE_OPTIONS } from '../../utils/foodNames';
+import { suggestFoods } from '../../utils/foodSearch';
 import {
   changeIngredientFoodDraft,
+  changeIngredientState,
   changeIngredientText,
   selectIngredientFood,
   type IngredientDraft,
   type ResolvedIngredient,
 } from '../../utils/ingredientDraft';
+import { SegmentedControl } from '../ui/SegmentedControl';
 import { iconButtonClass } from '../ui/styles';
 import { FoodCombobox } from './FoodCombobox';
 import { FoodMeasureFields } from './FoodMeasureFields';
@@ -22,15 +26,13 @@ interface IngredientEditorProps {
   submitted: boolean;
   onChange: (row: IngredientDraft) => void;
   onRemove?: () => void;
-  /** Extra controls under the amount, for example the raw/cooked selector. */
-  beforePreview?: ReactNode;
-  /** Shown under the live calories, for example a duplicate-name warning. */
-  afterPreview?: ReactNode;
+  /** Ask whether a new food is raw or cooked (needed when it joins the library). */
+  showState?: boolean;
 }
 
 /**
- * One ingredient row: pick a library food or type a new one (with label values),
- * then enter the amount in the food's natural unit. Shows live calories and protein.
+ * One ingredient row. Picking a library food asks only for the amount. A name that is
+ * not in the library opens the new-food fields once the suggestions are out of the way.
  */
 export function IngredientEditor({
   item,
@@ -39,11 +41,18 @@ export function IngredientEditor({
   submitted,
   onChange,
   onRemove,
-  beforePreview,
-  afterPreview,
+  showState = false,
 }: IngredientEditorProps) {
   const { row } = item;
-  const showNewFields = item.isNew && row.text.trim() !== '';
+  const [listOpen, setListOpen] = useState(false);
+
+  const hasText = row.text.trim() !== '';
+  const hasSuggestions = useMemo(() => {
+    const { matches, nearMatches } = suggestFoods(foods, row.text);
+    return matches.length + nearMatches.length > 0;
+  }, [foods, row.text]);
+  const showNewFields = item.isNew && hasText && !(listOpen && hasSuggestions);
+  const showAmount = item.food !== null || showNewFields;
 
   return (
     <div className="space-y-3 rounded-xl p-3 ring-1 ring-slate-200">
@@ -58,6 +67,7 @@ export function IngredientEditor({
             selectedFoodId={item.food?.id ?? null}
             onInputChange={(text) => onChange(changeIngredientText(row, text, foods))}
             onSelect={(food) => onChange(selectIngredientFood(row, food))}
+            onOpenChange={setListOpen}
             error={submitted ? item.errors.name : undefined}
           />
         </div>
@@ -81,22 +91,33 @@ export function IngredientEditor({
         />
       )}
 
-      <QuantityInput
-        measure={item.measure}
-        draft={row.quantity}
-        onChange={(quantity) => onChange({ ...row, quantity })}
-        foodLabel={item.name || undefined}
-        error={submitted || row.quantity.text !== '' ? item.errors.quantity : undefined}
-      />
+      {showNewFields && showState && (
+        <div>
+          <span className="mb-1 block text-sm font-medium text-slate-700">State</span>
+          <SegmentedControl
+            ariaLabel={`State of ${item.name}`}
+            value={row.state}
+            onChange={(state) => onChange(changeIngredientState(row, state, foods))}
+            options={FOOD_STATE_OPTIONS}
+          />
+        </div>
+      )}
 
-      {beforePreview}
-
-      <NutritionPreview
-        values={item.portion}
-        emptyText={item.food ? 'Enter an amount to see calories and protein' : 'Enter an amount and the label values'}
-      />
-
-      {afterPreview}
+      {showAmount && (
+        <>
+          <QuantityInput
+            measure={item.measure}
+            draft={row.quantity}
+            onChange={(quantity) => onChange({ ...row, quantity })}
+            foodLabel={item.name || undefined}
+            error={submitted || row.quantity.text !== '' ? item.errors.quantity : undefined}
+          />
+          <NutritionPreview
+            values={item.portion}
+            emptyText={item.food ? 'Enter an amount to see calories and protein' : 'Enter an amount and the label values'}
+          />
+        </>
+      )}
     </div>
   );
 }

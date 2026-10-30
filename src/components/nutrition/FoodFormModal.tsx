@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { AlertTriangle, RotateCcw, Save } from 'lucide-react';
+import { useToday } from '../../hooks/useToday';
 import { useAppStore } from '../../store';
 import type { NewFoodItem } from '../../store/types';
 import type { FoodItem, FoodState } from '../../types';
+import { countFoodEntries, nutritionChanged } from '../../utils/entryUpdates';
 import {
   applyMeasureToDraft,
   draftForReview,
@@ -21,6 +23,7 @@ import { TextField } from '../ui/TextField';
 import { primaryButtonClass } from '../ui/styles';
 import { DuplicateWarning } from './DuplicateWarning';
 import { FoodMeasureFields } from './FoodMeasureFields';
+import { UpdateEntriesDialog, type EntryUpdateScope } from './UpdateEntriesDialog';
 
 interface FoodFormModalProps {
   food?: FoodItem;
@@ -41,6 +44,9 @@ export function FoodFormModal({ food, onClose }: FoodFormModalProps) {
   const addFood = useAppStore((state) => state.addFood);
   const replaceFood = useAppStore((state) => state.replaceFood);
   const deleteFood = useAppStore((state) => state.deleteFood);
+  const refreshFoodEntries = useAppStore((state) => state.refreshFoodEntries);
+  const logs = useAppStore((state) => state.logs);
+  const today = useToday();
 
   const reviewingMeasure = Boolean(food?.needsReview && food.suggestedMeasure && !isServingBased(food));
   const [name, setName] = useState(food?.name ?? '');
@@ -48,7 +54,10 @@ export function FoodFormModal({ food, onClose }: FoodFormModalProps) {
   const [draft, setDraft] = useState<FoodDraft>(() => initialDraft(food));
   const [measureEdited, setMeasureEdited] = useState(Boolean(food));
   const [submitted, setSubmitted] = useState(false);
+  /** An edit waiting for the answer to "update logged entries?". */
+  const [pendingEdit, setPendingEdit] = useState<NewFoodItem | null>(null);
 
+  const entryCounts = food ? countFoodEntries(logs, food.id, today) : null;
   const draftErrors = validateFoodDraft(draft);
   const nameError = name.trim() === '' ? 'Enter a name' : undefined;
   const hasErrors = Boolean(nameError) || hasDraftErrors(draftErrors);
@@ -80,8 +89,20 @@ export function FoodFormModal({ food, onClose }: FoodFormModalProps) {
     setSubmitted(true);
     const data = buildData(finalName);
     if (!data) return;
+    if (food && nutritionChanged(food, data) && entryCounts && entryCounts.all > 0) {
+      setPendingEdit(data);
+      return;
+    }
     if (food) replaceFood(food.id, data);
     else addFood(data);
+    onClose();
+  };
+
+  const applyPendingEdit = (scope: EntryUpdateScope) => {
+    if (!food || !pendingEdit) return;
+    replaceFood(food.id, pendingEdit);
+    if (scope === 'today') refreshFoodEntries(food.id, today);
+    if (scope === 'all') refreshFoodEntries(food.id);
     onClose();
   };
 
@@ -110,6 +131,17 @@ export function FoodFormModal({ food, onClose }: FoodFormModalProps) {
     if (!original) return;
     setDraft((prev) => ({ ...prev, calories: original.calories, protein: original.protein, fiber: original.fiber }));
   };
+
+  if (pendingEdit && entryCounts) {
+    return (
+      <UpdateEntriesDialog
+        todayCount={entryCounts.date}
+        allCount={entryCounts.all}
+        onChoose={applyPendingEdit}
+        onCancel={() => setPendingEdit(null)}
+      />
+    );
+  }
 
   return (
     <Modal

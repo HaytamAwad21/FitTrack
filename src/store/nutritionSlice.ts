@@ -1,6 +1,7 @@
 import type { StateCreator } from 'zustand';
 import { SEED_FOODS } from '../data/foods';
 import type { DailyLog, FoodItem, MealEntry } from '../types';
+import { recalculateLogs, unlinkFood } from '../utils/entryUpdates';
 import { createId } from '../utils/id';
 import type { AppState, NutritionSlice } from './types';
 
@@ -33,7 +34,14 @@ export const createNutritionSlice: StateCreator<
       foods: state.foods.map((food) => (food.id === id ? ({ ...data, id } as FoodItem) : food)),
     })),
 
-  deleteFood: (id) => set((state) => ({ foods: state.foods.filter((food) => food.id !== id) })),
+  deleteFood: (id) =>
+    set((state) => ({ foods: state.foods.filter((food) => food.id !== id), logs: unlinkFood(state.logs, id) })),
+
+  refreshFoodEntries: (id, date) =>
+    set((state) => {
+      const food = state.foods.find((item) => item.id === id);
+      return food ? { logs: recalculateLogs(state.logs, food, date) } : {};
+    }),
 
   addEntries: (date, entries) =>
     set((state) => {

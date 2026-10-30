@@ -5,6 +5,7 @@ import type {
   DailyLog,
   Exercise,
   FoodItem,
+  LoggedAmount,
   MealEntry,
   MealIngredient,
   Micronutrients,
@@ -20,8 +21,8 @@ import type {
   WorkoutType,
   WorkoutTypeId,
 } from '../types';
-import { findDuplicateFood } from '../utils/foodNames';
-import { detectMeasure, servingMeasure } from '../utils/measure';
+import { findDuplicateFood, findFoodByDisplayName, normalizeFoodName } from '../utils/foodNames';
+import { detectMeasure, measureOf, servingMeasure } from '../utils/measure';
 import {
   BUILT_IN_ORDER,
   SETS_RANGE,
@@ -38,7 +39,7 @@ import { getDefaultWeekdays } from '../utils/schedule';
 import { roundTo } from '../utils/units';
 import type { PersistedState } from './types';
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /** Ids of the schema version 1 seed foods. They are replaced by the current seed list. */
 export const V1_SEED_FOOD_IDS = new Set([
@@ -483,6 +484,56 @@ export function addMissingSeedExercises(state: Record<string, unknown>): Record<
   return { ...state, schemaVersion: 9, exercises: [...exercises, ...missing] };
 }
 
+/** Library food with exactly this name: the display name first, then the bare name if only one food has it. */
+function foodForLoggedName(foods: FoodItem[], name: string): FoodItem | undefined {
+  const exact = findFoodByDisplayName(foods, name);
+  if (exact) return exact;
+  const target = normalizeFoodName(name);
+  const sameName = foods.filter((food) => normalizeFoodName(food.name) === target);
+  return sameName.length === 1 ? sameName[0] : undefined;
+}
+
+/** Links a logged item to the library and fills in a missing quantity. Calories and protein never change. */
+function linkLogged<T extends LoggedAmount & { foodId?: string | null; name: string }>(item: T, foods: FoodItem[]): T {
+  const linked = foods.find((food) => food.id === item.foodId) ?? foodForLoggedName(foods, item.name);
+  if (!linked) return { ...item, foodId: null };
+  if (item.quantity !== undefined) return { ...item, foodId: linked.id };
+
+  const measure = measureOf(linked);
+  if (item.grams <= 0) return { ...item, foodId: linked.id };
+  if (measure.kind === 'weight') return { ...item, foodId: linked.id, quantity: item.grams, unit: 'g' };
+  if (measure.servingWeightG === undefined) return { ...item, foodId: linked.id };
+  return {
+    ...item,
+    foodId: linked.id,
+    quantity: roundTo(item.grams / measure.servingWeightG, 2),
+    unit: measure.unitName,
+    unitPlural: measure.unitNamePlural,
+  };
+}
+
+/**
+ * Version 9 to 10: logged entries and their ingredients link to library foods, so a
+ * library edit can update them. A link to a deleted food becomes null unless the name
+ * still matches a food. Stored calories and protein are unchanged.
+ */
+export function migrateV9ToV10(state: Record<string, unknown>): Record<string, unknown> {
+  const foods = (Array.isArray(state.foods) ? state.foods : []).filter(Boolean) as FoodItem[];
+  const storedLogs = state.logs && typeof state.logs === 'object' ? (state.logs as Record<string, DailyLog | null>) : {};
+  const logs: Record<string, DailyLog> = {};
+  for (const [date, log] of Object.entries(storedLogs)) {
+    if (!log) continue;
+    const entries = (Array.isArray(log.entries) ? log.entries : []).filter(Boolean).map((entry) => {
+      const linked = linkLogged(entry, foods);
+      return entry.ingredients
+        ? { ...linked, ingredients: entry.ingredients.map((ingredient) => linkLogged(ingredient, foods)) }
+        : linked;
+    });
+    logs[date] = { ...log, entries };
+  }
+  return { ...state, schemaVersion: 10, logs };
+}
+
 /**
  * Upgrades persisted state from `version` to SCHEMA_VERSION.
  * Each step handles one version bump; the current version is returned unchanged.
@@ -527,6 +578,10 @@ export function migrateState(persistedState: unknown, version: number): Persiste
 
   if (version < 9) {
     state = addMissingSeedExercises(state);
+  }
+
+  if (version < 10) {
+    state = migrateV9ToV10(state);
   }
 
   return state as unknown as PersistedState;

@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Plus, Save, X } from 'lucide-react';
 import { useAppStore } from '../../store';
-import type { FoodItem, MealEntry, MealIngredient } from '../../types';
+import type { FoodItem, LoggedAmount, MealEntry, MealIngredient } from '../../types';
+import { amountForFood } from '../../utils/entryUpdates';
 import {
   createIngredientDraft,
   portionToIngredient,
@@ -9,8 +10,8 @@ import {
   type IngredientDraft,
 } from '../../utils/ingredientDraft';
 import { WEIGHT_MEASURE, basisOf, formatAmount, type NutritionBasis } from '../../utils/measure';
-import { basisFromLogged, computePortion } from '../../utils/nutrition';
-import { draftFromLogged, parseQuantity, type QuantityDraft } from '../../utils/portion';
+import { basisFromLogged, computePortion, type Portion } from '../../utils/nutrition';
+import { defaultQuantityDraft, draftFromLogged, parseQuantity, type QuantityDraft } from '../../utils/portion';
 import { formatNumber, roundTo } from '../../utils/units';
 import { parseNumber } from '../../utils/validation';
 import { Modal } from '../ui/Modal';
@@ -30,27 +31,35 @@ interface IngredientRow {
   original: MealIngredient;
   /** Per-unit values; null when the logged amount is unknown and cannot be rescaled. */
   basis: NutritionBasis | null;
+  /** The amount as first shown; while unchanged the ingredient keeps its logged values. */
+  initial: QuantityDraft;
   quantity: QuantityDraft;
 }
 
+/** A logged amount in a linked food's current terms, or null when it cannot be converted. */
+function currentPortion(logged: LoggedAmount, food: FoodItem | undefined): { food: FoodItem; portion: Portion } | null {
+  const amount = food ? amountForFood(logged, food) : null;
+  const portion = food && amount ? computePortion(basisOf(food), amount) : null;
+  return food && portion ? { food, portion } : null;
+}
+
 /**
- * Per-unit values for a logged ingredient come from the numbers it was logged with,
- * so untouched ingredients keep their values. Old ingredients without an amount fall
- * back to the library food.
+ * A changed amount is recalculated from the library food's current values while the
+ * ingredient is linked, otherwise from the numbers it was logged with. Old ingredients
+ * without an amount fall back to the library food.
  */
 function toRow(ingredient: MealIngredient, index: number, foodsById: Map<string, FoodItem>): IngredientRow {
   const food = ingredient.foodId ? foodsById.get(ingredient.foodId) : undefined;
-  const basis = basisFromLogged(ingredient) ?? (food ? basisOf(food) : null);
-  return {
-    key: `${index}-${ingredient.name}`,
-    original: ingredient,
-    basis,
-    quantity: draftFromLogged(basis?.measure ?? WEIGHT_MEASURE, ingredient),
-  };
+  const current = currentPortion(ingredient, food);
+  const basis = current ? basisOf(current.food) : (basisFromLogged(ingredient) ?? (food ? basisOf(food) : null));
+  const quantity = draftFromLogged(basis?.measure ?? WEIGHT_MEASURE, current?.portion ?? ingredient);
+  return { key: `${index}-${ingredient.name}`, original: ingredient, basis, initial: quantity, quantity };
 }
 
 function resolveIngredient(row: IngredientRow): { ingredient: MealIngredient | null; error?: string } {
   if (!row.basis) return { ingredient: row.original };
+  const unchanged = row.quantity.mode === row.initial.mode && row.quantity.text === row.initial.text;
+  if (unchanged) return { ingredient: row.original };
   const { amount, error } = parseQuantity(row.basis.measure, row.quantity);
   const portion = amount ? computePortion(row.basis, amount) : null;
   if (!portion) return { ingredient: null, error };
@@ -72,11 +81,26 @@ export function EditEntryModal({ date, entry, onClose }: EditEntryModalProps) {
   const foods = useAppStore((state) => state.foods);
 
   const isMeal = (entry.ingredients?.length ?? 0) > 0;
-  const singleBasis = useMemo(() => basisFromLogged(entry), [entry]);
+  const hasLoggedAmount = entry.grams > 0 || (entry.unit !== undefined && entry.unit !== 'g' && (entry.quantity ?? 0) > 0);
+  const linkedFood = useMemo(
+    () => (entry.foodId ? foods.find((food) => food.id === entry.foodId) : undefined),
+    [entry.foodId, foods],
+  );
+  const current = useMemo(() => currentPortion(entry, linkedFood), [entry, linkedFood]);
+  // A changed amount uses the food's current library values; an unlinked entry rescales its logged numbers.
+  const usesLibrary = linkedFood !== undefined && (current !== null || !hasLoggedAmount);
+  const singleBasis = useMemo(
+    () => (linkedFood && usesLibrary ? basisOf(linkedFood) : basisFromLogged(entry)),
+    [entry, linkedFood, usesLibrary],
+  );
   const singleMeasure = singleBasis?.measure ?? WEIGHT_MEASURE;
 
   const [name, setName] = useState(entry.name);
-  const [quantity, setQuantity] = useState<QuantityDraft>(() => draftFromLogged(singleMeasure, entry));
+  const [quantity, setQuantity] = useState<QuantityDraft>(() =>
+    hasLoggedAmount
+      ? draftFromLogged(singleMeasure, current?.portion ?? entry)
+      : { ...defaultQuantityDraft(singleMeasure), text: '' },
+  );
   const [calories, setCalories] = useState(String(entry.calories));
   const [protein, setProtein] = useState(formatNumber(entry.proteinG, 1));
   const [ingredients, setIngredients] = useState<IngredientRow[]>(() => {
@@ -107,7 +131,7 @@ export function EditEntryModal({ date, entry, onClose }: EditEntryModalProps) {
   );
 
   // Single entries logged before weights were tracked may keep an empty amount.
-  const keepsUnknownAmount = !singleBasis && quantity.text.trim() === '';
+  const keepsUnknownAmount = !hasLoggedAmount && quantity.text.trim() === '';
   const singleParse = parseQuantity(singleMeasure, quantity);
   const caloriesValue = parseNumber(calories);
   const proteinValue = parseNumber(protein);
@@ -313,9 +337,11 @@ export function EditEntryModal({ date, entry, onClose }: EditEntryModalProps) {
               error={submitted || quantity.text !== '' ? errors.quantity : undefined}
             />
             <p className="text-xs text-slate-500">
-              {singleBasis
-                ? 'Changing the amount rescales calories and protein.'
-                : 'No amount was recorded for this entry, so calories and protein are not rescaled.'}
+              {usesLibrary
+                ? 'Changing the amount recalculates calories and protein from the library.'
+                : singleBasis
+                  ? 'Changing the amount rescales calories and protein.'
+                  : 'No amount was recorded for this entry, so calories and protein are not rescaled.'}
             </p>
             <div className="grid grid-cols-2 gap-3">
               <TextField

@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 
 import { AlertCircle, AlertTriangle, Search } from 'lucide-react';
 import type { FoodItem } from '../../types';
 import { formatFoodName } from '../../utils/foodNames';
+import { suggestFoods } from '../../utils/foodSearch';
 import { formatNutritionBasis } from '../../utils/measure';
 import { filterFoods } from '../../utils/nutrition';
 
@@ -18,11 +19,16 @@ interface FoodComboboxProps {
   /** Shown in the dropdown when the typed text matches no library food. */
   noMatchText?: string;
   autoFocus?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 const MAX_RESULTS = 50;
 
-/** Searchable food picker: type to filter, arrow keys to move, Enter or click to select. */
+/**
+ * Searchable food picker: type to filter, arrow keys to move, Enter or click to select.
+ * Close names appear under "Did you mean" and must be picked on purpose, so Enter
+ * never swaps a new food's name for a similar one.
+ */
 export function FoodCombobox({
   foods,
   inputValue,
@@ -34,6 +40,7 @@ export function FoodCombobox({
   error,
   noMatchText = 'No foods match.',
   autoFocus,
+  onOpenChange,
 }: FoodComboboxProps) {
   const baseId = useId();
   const inputId = `${baseId}-input`;
@@ -44,25 +51,32 @@ export function FoodCombobox({
   /** Last pointer position, so hover only moves the highlight on real mouse movement. */
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
 
-  const matches = useMemo(() => {
+  const { options, nearStart } = useMemo(() => {
     const selected = selectedFoodId ? foods.find((food) => food.id === selectedFoodId) : undefined;
     if (selected && formatFoodName(selected) === inputValue) {
       // The input shows the selected food: list it first (so Enter keeps it), then everything else to switch to.
       const others = filterFoods(foods, '').filter((food) => food.id !== selected.id);
-      return [selected, ...others].slice(0, MAX_RESULTS);
+      const list = [selected, ...others].slice(0, MAX_RESULTS);
+      return { options: list, nearStart: list.length };
     }
-    return filterFoods(foods, inputValue).slice(0, MAX_RESULTS);
+    const { matches, nearMatches } = suggestFoods(foods, inputValue);
+    const list = [...matches.slice(0, MAX_RESULTS - nearMatches.length), ...nearMatches];
+    return { options: list, nearStart: list.length - nearMatches.length };
   }, [foods, inputValue, selectedFoodId]);
 
-  // Highlight the selected food (for example after an exact name match), otherwise the first match,
-  // so Enter never swaps the selection for another food.
+  // Highlight the selected food (for example after an exact name match), otherwise the first plain match.
   useEffect(() => {
-    setActiveIndex(Math.max(0, matches.findIndex((food) => food.id === selectedFoodId)));
-  }, [matches, selectedFoodId]);
+    const selectedIndex = options.findIndex((food) => food.id === selectedFoodId);
+    setActiveIndex(selectedIndex >= 0 ? selectedIndex : nearStart > 0 ? 0 : -1);
+  }, [options, nearStart, selectedFoodId]);
 
   useEffect(() => {
     if (open) optionRefs.current[activeIndex]?.scrollIntoView({ block: 'nearest' });
   }, [activeIndex, open]);
+
+  useEffect(() => {
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
 
   const choose = (food: FoodItem) => {
     onSelect(food);
@@ -77,17 +91,17 @@ export function FoodCombobox({
           setOpen(true);
           break;
         }
-        setActiveIndex((index) => (matches.length === 0 ? 0 : Math.min(index + 1, matches.length - 1)));
+        setActiveIndex((index) => Math.min(index + 1, options.length - 1));
         break;
       case 'ArrowUp':
         event.preventDefault();
         setActiveIndex((index) => Math.max(index - 1, 0));
         break;
       case 'Enter':
-        if (open && matches[activeIndex]) {
-          event.preventDefault();
-          choose(matches[activeIndex]);
-        }
+        if (!open || options.length === 0) break;
+        event.preventDefault();
+        if (options[activeIndex]) choose(options[activeIndex]);
+        else setOpen(false);
         break;
       case 'Escape':
         if (open) {
@@ -102,7 +116,7 @@ export function FoodCombobox({
     }
   };
 
-  const activeOptionId = open && matches[activeIndex] ? `${baseId}-option-${activeIndex}` : undefined;
+  const activeOptionId = open && options[activeIndex] ? `${baseId}-option-${activeIndex}` : undefined;
 
   return (
     <div
@@ -152,37 +166,51 @@ export function FoodCombobox({
           aria-label={label}
           className="absolute left-0 right-0 z-20 mt-1 max-h-64 overflow-y-auto rounded-xl bg-white py-1 shadow-lg ring-1 ring-slate-200"
         >
-          {matches.length === 0 ? (
+          {options.length === 0 ? (
             <li className="px-3 py-2 text-sm text-slate-500">{noMatchText}</li>
           ) : (
-            matches.map((food, index) => (
-              <li
-                key={food.id}
-                id={`${baseId}-option-${index}`}
-                ref={(element) => {
-                  optionRefs.current[index] = element;
-                }}
-                role="option"
-                aria-selected={food.id === selectedFoodId}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => choose(food)}
-                onMouseMove={(event) => {
-                  // When the list appears or scrolls under a still pointer the browser fires a synthetic
-                  // mousemove at the same position; only real movement should move the highlight.
-                  // (This handler runs before the container's, which records the position.)
-                  const previous = lastPointer.current;
-                  if (previous && previous.x === event.clientX && previous.y === event.clientY) return;
-                  setActiveIndex(index);
-                }}
-                className={`cursor-pointer px-3 py-2 ${index === activeIndex ? 'bg-emerald-50' : ''}`}
-              >
-                <span className="flex items-center gap-1 text-sm font-medium text-slate-900">
-                  {food.needsReview && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
-                  {formatFoodName(food)}
-                </span>
-                <span className="block text-xs tabular-nums text-slate-500">{formatNutritionBasis(food)}</span>
-              </li>
-            ))
+            options.flatMap((food, index) => {
+              const option = (
+                <li
+                  key={food.id}
+                  id={`${baseId}-option-${index}`}
+                  ref={(element) => {
+                    optionRefs.current[index] = element;
+                  }}
+                  role="option"
+                  aria-selected={food.id === selectedFoodId}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => choose(food)}
+                  onMouseMove={(event) => {
+                    // When the list appears or scrolls under a still pointer the browser fires a synthetic
+                    // mousemove at the same position; only real movement should move the highlight.
+                    // (This handler runs before the container's, which records the position.)
+                    const previous = lastPointer.current;
+                    if (previous && previous.x === event.clientX && previous.y === event.clientY) return;
+                    setActiveIndex(index);
+                  }}
+                  className={`cursor-pointer px-3 py-2 ${index === activeIndex ? 'bg-emerald-50' : ''}`}
+                >
+                  <span className="flex items-center gap-1 text-sm font-medium text-slate-900">
+                    {food.needsReview && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
+                    {formatFoodName(food)}
+                  </span>
+                  <span className="block text-xs tabular-nums text-slate-500">{formatNutritionBasis(food)}</span>
+                </li>
+              );
+              if (index !== nearStart) return [option];
+              return [
+                <li
+                  key="did-you-mean"
+                  role="presentation"
+                  onMouseDown={(event) => event.preventDefault()}
+                  className="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  Did you mean
+                </li>,
+                option,
+              ];
+            })
           )}
         </ul>
       )}
